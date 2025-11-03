@@ -1,6 +1,7 @@
 import requests
 from bs4 import BeautifulSoup
-import os  # 导入 os 模块
+import os
+import re
 
 def send_to_telegram(message):
     """发送消息到 Telegram"""
@@ -20,7 +21,7 @@ def send_to_telegram(message):
     payload = {
         'chat_id': chat_id,
         'text': message,
-        'parse_mode': 'Markdown' # 可选，让消息格式更丰富
+        'parse_mode': 'Markdown'
     }
 
     try:
@@ -31,11 +32,29 @@ def send_to_telegram(message):
         print(f"发送 Telegram 消息时出错: {e}")
 
 
+def get_usd_to_cny_rate():
+    try:
+        response = requests.get('https://api.frankfurter.app/latest?from=USD&to=CNY', timeout=5)
+        response.raise_for_status()
+        data = response.json()
+        
+        rate = data.get('rates', {}).get('CNY')
+        if rate:
+            print(f"成功获取汇率: 1 USD = {rate} CNY")
+            return float(rate)
+        else:
+            print("错误: 汇率 API 响应中未找到 CNY 汇率。")
+            return None
+    except requests.exceptions.RequestException as e:
+        print(f"获取汇率时出错: {e}")
+        return None
+
+
 # --- 你的原始抓取逻辑 ---
 
 # 你要抓取的实时 URL
 item_name = "Desert Eagle | Printstream (Field-Tested)"
-item_url = 'https://steamcommunity.com/market/listings/730/Desert%20Eagle%20%7C%20Printstream%20(Field-Tested)?currency=23'
+item_url = 'https://steamcommunity.com/market/listings/730/Desert%20Eagle%20%7C%20Printstream%20(Field-Tested)'
 
 # 模拟浏览器的 Headers
 headers = {
@@ -60,14 +79,35 @@ try:
             price_element = second_item.find(class_='market_listing_price_without_fee')
             
             if price_element:
-                price = price_element.get_text(strip=True)
-                print(f"成功获取价格: {price}")
+                # 1. 获取价格字符串，例如 "$150.99"
+                usd_price_string = price_element.get_text(strip=True)
                 
-                # --- 发送到 Telegram ---
-                # 构建消息内容
-                message_content = f"**Steam 价格提醒**\n\n**物品:** {item_name}\n**当前价格:** `{price}`"
-                send_to_telegram(message_content)
-                # -----------------------
+                # 2. 清理字符串，只保留数字和小数点
+                cleaned_price_string = re.sub(r"[^\d\.]", "", usd_price_string)
+                usd_price = float(cleaned_price_string)
+                print(f"成功获取 USD 价格: ${usd_price:.2f}")
+
+                # 3. 获取实时汇率
+                rate = get_usd_to_cny_rate()
+                
+                if rate:
+                    # 4. 计算人民币价格
+                    cny_price = usd_price * rate
+                    print(f"换算后 CNY 价格: ¥{cny_price:.2f}")
+                    
+                    # 5. 发送 Telegram 消息
+                    message_content = (
+                        f"**Steam 价格提醒**\n\n"
+                        f"**物品:** {item_name}\n"
+                        f"**原始价格 (USD):** `${usd_price:.2f}`\n"
+                        f"**换算价格 (CNY):** `¥{cny_price:.2f}`\n"
+                        f"*(汇率: 1 USD ≈ {rate:.4f} CNY)*"
+                    )
+                    send_to_telegram(message_content)
+                else:
+                    # 汇率获取失败，但仍然发送 USD 价格
+                    print("获取汇率失败，仅发送 USD 价格。")
+                    send_to_telegram(f"抓取 {item_name} 成功。\n原始价格 (USD): `${usd_price:.2f}`\n(获取 CNY 汇率失败)")
                 
             else:
                 print("错误: 未在第二个物品中找到价格元素。")
